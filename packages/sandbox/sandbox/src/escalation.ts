@@ -21,9 +21,11 @@ import type { SandboxMode } from './index.ts'
 
 /**
  * The strictly-wider table: what a call whose effective mode is the key may
- * escalate TO. Checked at EXECUTION, never baked into a tool schema — the
- * schema's enum is {@link ESCALATION_TARGETS}, because schemas are
- * registry-global while the effective mode is per-call truth.
+ * escalate TO. Execution always checks this table against per-call truth. A
+ * consumer that has the calling session during request assembly may also
+ * project these values into that request's model-facing schema; its
+ * registry-global baseline remains {@link ESCALATION_TARGETS}, and execution
+ * stays authoritative for untrusted or injected arguments.
  */
 export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
   'read-only': ['workspace-write', 'danger-full-access'],
@@ -31,12 +33,11 @@ export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
 }
 
 /**
- * The closed escalation-target vocabulary — every mode a call could ever
- * escalate TO (`read-only` is the floor; nothing escalates to it). Advertised
- * whenever the mounted capability confines: cutting the enum down to the modes
- * wider than the composition's DEFAULT would strand a session whose effective
- * mode sits below it (a `danger-full-access` default would advertise nothing
- * while a narrower-switched session stays confined with no lever).
+ * The closed registry-global escalation-target vocabulary — every mode a call
+ * could ever escalate TO (`read-only` is the floor; nothing escalates to it).
+ * A model request may narrow this enum from its session's effective mode, but
+ * the baseline cannot be cut relative to the composition DEFAULT: doing so
+ * would strand a session whose override sits below it.
  */
 export const ESCALATION_TARGETS: readonly SandboxMode[] = ['workspace-write', 'danger-full-access']
 
@@ -156,9 +157,9 @@ export interface EscalationRequest {
  */
 export async function approveEscalation<A, C>(request: EscalationRequest, approval: EscalationApproval<A, C>): Promise<SandboxMode> {
   const { requestedMode: mode, effectiveMode, justification, subject } = request
-  // Strict widening is an EXECUTION check against the call's effective mode —
-  // deliberately not a schema constraint (the enum is the closed target
-  // vocabulary; the effective mode is per-call truth).
+  // Strict widening is always an EXECUTION check against per-call truth. A
+  // request-local schema can steer the model toward only these same targets,
+  // but this guard still handles stale, agent-less, or injected arguments.
   if (!(WIDER_MODES[effectiveMode] ?? []).includes(mode as SandboxMode)) {
     throw new Error(`sandbox escalation to "${mode}" is not strictly wider than this call's current "${effectiveMode}" mode`)
   }

@@ -47,15 +47,17 @@ The single config field toggles background support.
 |---|---|---|
 | `enableRunInBackground` | `true` | Expose `run_in_background`; when `false`, forced background calls are rejected |
 
-The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-pwsh) is the exhaustive source for every accepted field and its JSDoc; the generated [tool catalog](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh) carries the full argument schema.
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-pwsh) is the exhaustive source for every accepted field and its JSDoc; the generated [tool catalog](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh) carries the default sandbox-less argument schema.
 
 ### Running a command
+
+For an ordinary foreground call, the model should send only `command` and `description`; it omits every optional field unless the corresponding non-default behavior is needed. In particular, it omits `run_in_background` rather than sending `false`, and omits `timeoutMs` and `workdir` to use the executor and calling session defaults.
 
 The tool executes `pwsh -Command <command>` and returns the combined output. Commands run in a fresh pwsh process every call, so state never persists — pass `workdir` instead of `cd`. Paths use native Windows form and environment variables are read with `$env:NAME`. A non-zero exit is reported as `[exit code: N]`; on Windows a force-killed command settles as `[exit code: 1]` without a signal marker, so the agent treats a bare exit 1 after an interruption as a termination, not a command failure. Background runs, output truncation, and the `description`/`timeoutMs`/`workdir` arguments behave exactly as in `dsh-tool-bash`.
 
 ### Windows-specific sandbox behavior
 
-Under a sandboxing executor, denied commands report `[sandbox: file access denied under <mode> mode]`, and the same one-shot escalation path applies: retry the exact command once with `sandbox_permissions` plus a `justification` through user approval. The tool also teaches two Windows-restricted-token contracts in its description: read-only pwsh runs in ConstrainedLanguage (`.NET` static calls, `Add-Type`, COM, and reflection fail with "only core types" errors), and in both confined modes programs cannot open named pipes, so a command that captures another program's output through piped stdio fails with EPERM — escalate the exact command once or restructure it to avoid capturing output.
+Under a sandboxing executor, denied commands report `[sandbox: file access denied under <mode> mode]`, and the same one-shot escalation path applies: retry the exact command once with `sandbox_permissions` plus a `justification` through user approval. Each direct Native `pwsh` schema exposes only targets strictly wider than that session's effective mode: read-only offers both wider modes, workspace-write offers only `danger-full-access`, and danger-full-access omits both escalation fields. In a confining composition, the process-wide registered definition remains the complete escalation baseline for agent-less diagnostics and PTC-mode SDK text, while execution independently rejects stale, injected, non-widening, or unapprovable requests before running anything. When the projected request remains confined, the description also teaches two Windows restricted-token contracts: read-only pwsh runs in ConstrainedLanguage (`.NET` static calls, `Add-Type`, COM, and reflection fail with "only core types" errors), and in both confined modes programs cannot open named pipes, so a command that captures another program's output through piped stdio fails with EPERM — escalate the exact command once or restructure it to avoid capturing output.
 
 ### What can go wrong
 
@@ -138,15 +140,15 @@ Prefix-stable while the registration scope and prompt text are unchanged. Plugin
 
 #### What the model sees
 
-The model sees the generated [`pwsh` schema](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh). Agent-scoped tool restrictions can remove the definition for that agent.
+The generated [`pwsh` schema](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh) shows the default sandbox-less catalog. In a confining composition, the process-wide registered definition, agent-less diagnostics, and PTC-mode SDK text retain the complete escalation vocabulary. Each direct Native `pwsh` schema projects its own session mode onto that definition: only strictly wider escalation targets remain, and the paired escalation fields disappear at `danger-full-access`. Agent-scoped tool restrictions can remove the definition for that agent.
 
 #### Token effect
 
-Fixed schema cost on every request where the tool is visible.
+Schema cost is fixed while that session's effective sandbox mode and tool visibility are unchanged. Wider-mode requests are slightly smaller because impossible escalation values, or the complete paired fields at `danger-full-access`, are absent.
 
 #### KV Cache effect
 
-Prefix-stable while visibility and the tool definition are unchanged. A restriction or config change may invalidate reuse from the first changed token.
+Prefix-stable while visibility and the session's effective mode are unchanged. A sandbox-mode switch while `pwsh` remains visible changes the request-local tool header and may invalidate reuse from the first changed schema token.
 
 ### Foreground result
 

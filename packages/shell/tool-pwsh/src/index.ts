@@ -25,13 +25,14 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool, TOOL_ABORTED } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, TerminalCallView, ToolExecution, ToolResult, ToolResultView } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { FIRST_PARTY_SECTION_ORDER } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, WIDER_MODES, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
@@ -104,10 +105,14 @@ function pwshDescription(backgroundEnabled: boolean, escalationModes: readonly S
   const background = backgroundEnabled
     ? 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.'
     : 'Background execution is not available; long-running commands must finish within the timeout.'
+  const ordinary = 'For an ordinary foreground call, pass only `command` and `description`. '
+    + 'Omit every optional property unless its non-default behavior is specifically needed; '
+    + 'never send `false`, empty strings, or other default placeholder values. '
   const base = 'Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr. '
     + 'Each call runs in a fresh pwsh process: no state (cwd, variables, functions) persists between calls — '
     + 'pass `workdir` instead of using `cd`. Paths use native Windows form (`C:\\...`); read environment '
     + 'variables with `$env:NAME`. Non-zero exits are reported as `[exit code: N]`. '
+    + ordinary
     + 'Current harness environment facts are exposed through managed `$env:DSH_*` variables; inspect them when needed. '
     + 'Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. '
     + 'Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. '
@@ -141,6 +146,37 @@ function pwshDescription(backgroundEnabled: boolean, escalationModes: readonly S
     + 'just hit; escalating up front is fine only when this session already denied the same access. '
     + 'A rejected escalation is final for that command — stop and explain, never work around '
     + 'it — but it does not forbid attempting or escalating other commands later.'
+}
+
+/**
+ * Project the registry-global pwsh schema onto one session's strictly wider
+ * escalation targets. The registered definition retains the complete target
+ * vocabulary so execution can validate untrusted/injected arguments; only the
+ * request-local model surface is narrowed. At the top of the ladder both
+ * paired fields and all escalation-only prose disappear.
+ */
+function projectPwshSchema(
+  schema: ToolSchema,
+  backgroundEnabled: boolean,
+  escalationModes: readonly SandboxMode[],
+): ToolSchema {
+  const properties = schema.parameters.properties as Record<string, unknown> | undefined
+  if (properties === undefined) return schema
+  const projectedProperties = { ...properties }
+  if (escalationModes.length === 0) {
+    delete projectedProperties.sandbox_permissions
+    delete projectedProperties.justification
+  } else {
+    const permissions = projectedProperties.sandbox_permissions as Record<string, unknown> | undefined
+    if (permissions !== undefined) {
+      projectedProperties.sandbox_permissions = { ...permissions, enum: [...escalationModes] }
+    }
+  }
+  return {
+    ...schema,
+    description: pwshDescription(backgroundEnabled, escalationModes),
+    parameters: { ...schema.parameters, properties: projectedProperties },
+  }
 }
 
 /**
@@ -248,7 +284,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       + 'On Windows a killed process settles as `[exit code: 1]` without a signal marker; treat a bare exit 1 after an interruption as a termination, not a command failure.',
   })
 
-  ctx.tools.register(defineTool({
+  const pwshTool = defineTool({
     name: 'pwsh',
     description: pwshDescription(backgroundEnabled, escalationModes),
     /* jscpd:ignore-start -- deliberate mirror of dsh-tool-bash's parameter surface (pwsh-tool-and-executor Agent Note). */
@@ -261,20 +297,29 @@ export function apply(ctx: Context, config: Config = {}): void {
           + '5-10 words (shown in the UI). Examples: "ls" → "List files in current directory"; '
           + '"git status" → "Show working tree status"; "Get-Process" → "List running processes".',
       },
-      timeoutMs: { type: 'number', description: 'Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry.' },
-      workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
+      timeoutMs: {
+        type: 'number',
+        description: 'Optional; omit to use the executor default. When set, this is the timeout in milliseconds; the executor applies its configured cap and kills the command on expiry.',
+      },
+      workdir: {
+        type: 'string',
+        description: 'Optional; omit to use the session workspace. When set, this is the command working directory; a relative path is resolved against the session workspace.',
+      },
       ...backgroundEnabled ? {
-        run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
+        run_in_background: {
+          type: 'boolean' as const,
+          description: 'Optional; set true only for a background run and omit for foreground calls — never send false. Returns a job id immediately (collect with job_output, stop with job_kill); no timeout applies.',
+        },
       } : {},
       ...escalationModes.length > 0 ? {
         sandbox_permissions: {
           type: 'string' as const,
           enum: [...escalationModes],
-          description: 'The wider sandbox mode this command needs. Only valid as a one-shot retry of a command the sandbox just denied; requires justification and user approval.',
+          description: 'Optional; omit unless retrying the exact command after an actual sandbox denial. When set, choose the narrowest wider sandbox mode that suffices; requires justification and user approval.',
         },
         justification: {
           type: 'string' as const,
-          description: 'Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access.',
+          description: 'Only send together with sandbox_permissions: one sentence for the user explaining why this exact denied command needs the wider access.',
         },
       } : {},
     },
@@ -441,5 +486,26 @@ export function apply(ctx: Context, config: Config = {}): void {
       return { card: 'terminal', output: body, ...exit }
     },
     /* jscpd:ignore-end */
-  }))
+  })
+  ctx.tools.register(pwshTool)
+
+  // Tool definitions are registry-global, but prompt assembly carries the
+  // exact calling Agent. Narrow only what that session's model sees; execution
+  // still resolves policy independently and enforces strict widening below.
+  if (sandboxPolicy !== undefined) {
+    ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const assembled = await next()
+      const session = context.agent?.session
+      if (session === undefined || ctx.tools.get('pwsh', context.scope) !== pwshTool) return assembled
+      const effectiveMode = sandboxPolicy.resolve({ session }).mode
+      const requestEscalationModes = WIDER_MODES[effectiveMode] ?? []
+      if (requestEscalationModes.length === escalationModes.length) return assembled
+      return {
+        ...assembled,
+        tools: assembled.tools.map(schema => schema.name === 'pwsh'
+          ? projectPwshSchema(schema, backgroundEnabled, requestEscalationModes)
+          : schema),
+      }
+    })
+  }
 }
