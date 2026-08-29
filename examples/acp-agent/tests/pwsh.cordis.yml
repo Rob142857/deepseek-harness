@@ -8,8 +8,19 @@
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
 
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    # Keep the live counterpart aligned with the keyless replay: a real
+    # sandboxed executor whose request-local policy is danger-full-access.
+    mode: danger-full-access
+    workspaceRoot: !!js process.cwd()
+
 - id: bash
-  name: '@deepseek-ai/dsh-pwsh-local'
+  name: '@deepseek-ai/dsh-pwsh-sandbox'
 
 - id: shell-env
   name: '@deepseek-ai/dsh-shell-env'

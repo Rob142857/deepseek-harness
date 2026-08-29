@@ -18,13 +18,13 @@ The plugin also contributes the `tool:pwsh` prompt section (order 105): non-zero
 |---|---|---|
 | `command` | string (required) | Run via `pwsh -Command`. No state persists between calls — use `workdir`, not `cd`. |
 | `description` | string (required) | One-line, active-voice summary of the command (5-10 words), for UI/log display only — no effect on execution. |
-| `timeoutMs` | number | Timeout override in milliseconds. The executor applies its configured default and cap. |
-| `workdir` | string | Working directory for this call. Defaults to the calling agent's session cwd (`session.header.cwd`) so each session runs in its own workspace; a relative `workdir` is resolved against that same identity. |
-| `run_in_background` | boolean | Return a job id immediately; no timeout applies. |
-| `sandbox_permissions` | string enum | Advertised only when a sandboxing executor is mounted (`ctx.shell.sandboxMode` defined). The wider sandbox mode for a one-shot retry of a command the sandbox just denied — the narrowest wider mode that suffices, requiring `justification` and user approval through `ctx.approval` BEFORE execution. A non-widening or unapprovable request fails closed without running anything. |
-| `justification` | string | Required with `sandbox_permissions`: one sentence for the user explaining why this exact command needs the wider access. |
+| `timeoutMs` | number | Optional; omit it to use the executor default. A supplied value is capped by executor config. |
+| `workdir` | string | Optional; omit it to use the calling agent's session cwd (`session.header.cwd`) so each session runs in its own workspace. A relative value is resolved against that same identity. |
+| `run_in_background` | boolean | Set `true` only for a background run; omit it for foreground calls and never send `false`. Returns a job id immediately; no timeout applies. |
+| `sandbox_permissions` | string enum | Request-local and advertised only when a sandboxing executor is mounted and a strictly wider mode exists: read-only exposes `workspace-write` and `danger-full-access`, workspace-write exposes only `danger-full-access`, and danger-full-access omits both escalation fields. Use it only for a one-shot retry after an actual sandbox denial, with the narrowest mode that suffices. |
+| `justification` | string | Send only with `sandbox_permissions`: one sentence for the user explaining why this exact denied command needs wider access. |
 
-`command`, `workdir`, and `timeoutMs` are resolved against the executor's config defaults via `ctx.shell.resolve()` before execution. The workdir default is applied in the tool layer from the calling agent's `session.header.cwd` BEFORE `resolve()` — the per-session cwd must come from `exec.agent`, since N sessions share one executor; only when no session cwd is available does the executor fall back to its own config / `process.cwd()`.
+For an ordinary foreground call the model should send only `command` and `description`; every optional property is omitted unless its non-default behavior is needed. `command`, `workdir`, and `timeoutMs` are resolved against the executor's config defaults via `ctx.shell.resolve()` before execution. The workdir default is applied in the tool layer from the calling agent's `session.header.cwd` BEFORE `resolve()` — the per-session cwd must come from `exec.agent`, since N sessions share one executor; only when no session cwd is available does the executor fall back to its own config / `process.cwd()`. The registry baseline and agent-less diagnostics retain the complete escalation vocabulary, while execution independently rejects any stale, injected, non-widening, or unapprovable request before running anything.
 
 ### Managed shell environment
 
@@ -66,15 +66,15 @@ Prefix-stable while the registration scope and prompt text are unchanged. Plugin
 
 #### What the model sees
 
-The model sees the generated [`pwsh` schema](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh). Agent-scoped tool restrictions can remove the definition for that agent.
+The generated [`pwsh` schema](../../../docs/tool-catalog.md#deepseek-aidsh-tool-pwsh) is the registry-wide baseline used by catalogs and agent-less diagnostics. Each native agent request projects its own session policy onto that definition: only strictly wider escalation targets remain, and the paired escalation fields disappear at `danger-full-access`. Agent-scoped tool restrictions can remove the definition for that agent.
 
 #### Token effect
 
-Fixed schema cost on every request where the tool is visible.
+Schema cost is fixed while that session's effective sandbox mode and tool visibility are unchanged. Wider-mode requests are slightly smaller because impossible escalation values, or the complete paired fields at `danger-full-access`, are absent.
 
 #### KV Cache effect
 
-Prefix-stable while visibility and the tool definition are unchanged. A restriction or config change may invalidate reuse from the first changed token.
+Prefix-stable while visibility and the session's effective mode are unchanged. A permission switch changes the request-local tool header and may invalidate reuse from the first changed schema token.
 
 ### Foreground result
 

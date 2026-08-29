@@ -18,13 +18,13 @@
 |---|---|---|
 | `command` | string (required) | 通过 `pwsh -Command` 运行。调用之间不保留状态——用 `workdir`，不要用 `cd`。 |
 | `description` | string (required) | 命令的一行主动语态摘要（5-10 词），仅用于 UI/日志展示——不影响执行。 |
-| `timeoutMs` | number | 超时覆盖值（毫秒）。执行器应用其配置的默认值与上限。 |
-| `workdir` | string | 本次调用的工作目录。默认取调用 agent（智能体）的会话 cwd（`session.header.cwd`），使每个会话在自己的工作区运行；相对 `workdir` 基于同一身份解析。 |
-| `run_in_background` | boolean | 立即返回 job id；不适用超时。 |
-| `sandbox_permissions` | string enum | 仅当已挂载 sandbox 执行器时才会公开（`ctx.shell.sandboxMode` 已定义）。用于对刚被 sandbox 拒绝的命令做一次性重试的更宽 sandbox 模式——取刚好足够的最窄更宽模式，要求 `justification` 并在执行**之前**经 `ctx.approval` 获得用户批准。未拓宽或无法获批的请求 fail-closed，不运行任何内容。 |
-| `justification` | string | 必须与 `sandbox_permissions` 一同提供：用一句话向用户解释为何正是这条命令需要更宽的访问。 |
+| `timeoutMs` | number | 可选；省略时使用执行器默认值。提供的值受执行器配置上限约束。 |
+| `workdir` | string | 可选；省略时使用调用 agent（智能体）的会话 cwd（`session.header.cwd`），使每个会话在自己的工作区运行。相对值基于同一身份解析。 |
+| `run_in_background` | boolean | 仅在后台运行时设为 `true`；前台调用应省略，绝不发送 `false`。立即返回 job id；不适用超时。 |
+| `sandbox_permissions` | string enum | 按请求生成，并且只在挂载 sandbox 执行器且存在严格更宽模式时公开：read-only 提供 `workspace-write` 与 `danger-full-access`，workspace-write 只提供 `danger-full-access`，danger-full-access 则省略两个升级字段。仅用于实际 sandbox 拒绝后的一次性重试，并选择刚好足够的最窄模式。 |
+| `justification` | string | 只与 `sandbox_permissions` 一同发送：用一句话向用户解释为何正是这条被拒绝的命令需要更宽访问。 |
 
-`command`、`workdir` 与 `timeoutMs` 在执行前经 `ctx.shell.resolve()` 按执行器配置默认值解析。workdir 默认值在工具层于 `resolve()` 之前从调用 agent 的 `session.header.cwd` 取得——每次会话的 cwd 必须来自 `exec.agent`，因为 N 个会话共享一个执行器；仅当没有会话 cwd 时执行器才回退到自己的配置 / `process.cwd()`。
+普通前台调用中，模型应只发送 `command` 与 `description`；除非需要某项非默认行为，否则省略所有可选属性。`command`、`workdir` 与 `timeoutMs` 在执行前经 `ctx.shell.resolve()` 按执行器配置默认值解析。workdir 默认值在工具层于 `resolve()` 之前从调用 agent 的 `session.header.cwd` 取得——每次会话的 cwd 必须来自 `exec.agent`，因为 N 个会话共享一个执行器；仅当没有会话 cwd 时执行器才回退到自己的配置 / `process.cwd()`。注册表基线与无 agent 的诊断保留完整升级词汇，而执行阶段会在运行任何内容前独立拒绝过期、注入、非严格放宽或无法获批的请求。
 
 ### Managed shell environment
 
@@ -66,15 +66,15 @@ Non-zero exits are reported as `[exit code: N]` markers; investigate failures be
 
 #### 模型看到的内容
 
-模型看到生成的 [`pwsh` schema](../../../docs/tool-catalog.zh.md#deepseek-aidsh-tool-pwsh)。按 agent 作用域的工具限制可以移除该 agent 的定义。
+生成的 [`pwsh` schema](../../../docs/tool-catalog.zh.md#deepseek-aidsh-tool-pwsh) 是工具目录与无 agent 诊断使用的注册表全局基线。每个原生 agent 请求会把自身会话策略投影到该定义：只保留严格更宽的升级目标，并在 `danger-full-access` 下移除成对的升级字段。按 agent 作用域的工具限制可以移除该 agent 的定义。
 
 #### Token 影响
 
-工具可见的每个请求上的固定 schema 成本。
+当该会话的有效 sandbox 模式与工具可见性不变时，schema 成本固定。较宽模式的请求会略小，因为不可能的升级值会消失，或在 `danger-full-access` 下移除整对字段。
 
 #### KV Cache 影响
 
-可见性与工具定义不变时前缀稳定。限制或配置变更可能从首个变化 token 起使复用失效。
+当可见性与会话有效模式不变时前缀稳定。权限切换会改变按请求生成的工具 header，并可能从首个变化的 schema token 起使复用失效。
 
 ### 前台结果
 

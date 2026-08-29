@@ -11,8 +11,19 @@
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
 
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    # The real confining executor remains composed, while danger-full-access
+    # must remove impossible escalation fields from this request's pwsh schema.
+    mode: danger-full-access
+    workspaceRoot: !!js process.cwd()
+
 - id: bash
-  name: '@deepseek-ai/dsh-pwsh-local'
+  name: '@deepseek-ai/dsh-pwsh-sandbox'
 
 - id: shell-env
   name: '@deepseek-ai/dsh-shell-env'

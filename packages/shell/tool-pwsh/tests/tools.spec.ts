@@ -572,6 +572,50 @@ describe('sandbox escalation through ctx.approval', () => {
     }
   })
 
+  it('projects only strictly wider escalation targets into each agent request', async () => {
+    const { ctx } = await setupSandboxed()
+    const schemaFor = async (mode: 'read-only' | 'workspace-write' | 'danger-full-access') => {
+      const agent = sandboxAgent(mode)
+      const assembly = await ctx.systemPrompt.assemble({ agent, scope: agent })
+      return assembly.tools.find(item => item.name === 'pwsh')!
+    }
+
+    const [readOnly, workspaceWrite, dangerFullAccess] = await Promise.all([
+      schemaFor('read-only'),
+      schemaFor('workspace-write'),
+      schemaFor('danger-full-access'),
+    ])
+    expect((readOnly.parameters.properties as Record<string, { enum?: string[] }>).sandbox_permissions?.enum)
+      .toEqual(['workspace-write', 'danger-full-access'])
+    expect(readOnly.description).toContain('sandbox_permissions')
+    expect((readOnly.parameters.properties as Record<string, { description?: string }>).run_in_background?.description)
+      .toContain('never send false')
+
+    expect((workspaceWrite.parameters.properties as Record<string, { enum?: string[] }>).sandbox_permissions?.enum)
+      .toEqual(['danger-full-access'])
+    expect(workspaceWrite.description).toContain('sandbox_permissions')
+
+    expect(dangerFullAccess.parameters.properties).not.toHaveProperty('sandbox_permissions')
+    expect(dangerFullAccess.parameters.properties).not.toHaveProperty('justification')
+    expect(dangerFullAccess.description).not.toContain('sandbox_permissions')
+    expect(dangerFullAccess.description).not.toContain('approval prompt')
+    expect(dangerFullAccess.description).not.toContain('ConstrainedLanguage')
+    expect(dangerFullAccess.description).toContain('pass only `command` and `description`')
+    expect(dangerFullAccess.description).toContain('never send `false`')
+
+    // Diagnostics and execution retain the complete schema; request projection
+    // must not weaken the fail-closed runtime contract.
+    const registered = ctx.tools.schemas().find(item => item.name === 'pwsh')!
+    expect((registered.parameters.properties as Record<string, { enum?: string[] }>).sandbox_permissions?.enum)
+      .toEqual(['workspace-write', 'danger-full-access'])
+
+    // Agent-less diagnostic assembly has no session policy to project and
+    // therefore retains the registry baseline rather than guessing a mode.
+    const agentless = (await ctx.systemPrompt.assemble({})).tools.find(item => item.name === 'pwsh')!
+    expect((agentless.parameters.properties as Record<string, { enum?: string[] }>).sandbox_permissions?.enum)
+      .toEqual(['workspace-write', 'danger-full-access'])
+  })
+
   it('the escalation fields and the confined-mode clauses stay out of sandbox-less compositions', async () => {
     const { ctx } = await setup()
     const schema = ctx.tools.schemas().find(item => item.name === 'pwsh')!
@@ -585,12 +629,15 @@ describe('sandbox escalation through ctx.approval', () => {
     const plain = await setup()
     expect(text(await call(plain.ctx, 'pwsh', escalate))).toContain('not available in this composition')
 
-    const { ctx } = await setupSandboxed(true)
+    const { ctx, bash } = await setupSandboxed(true)
     const prompted = vi.fn()
     ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
     const result = await call(ctx, 'pwsh', { ...escalate, sandbox_permissions: 'workspace-write' }, sandboxAgent('workspace-write'))
     expect(text(result)).toContain('not strictly wider')
+    const fullAccess = await call(ctx, 'pwsh', { ...escalate, sandbox_permissions: 'danger-full-access' }, sandboxAgent('danger-full-access'))
+    expect(text(fullAccess)).toContain('not strictly wider')
     expect(prompted).not.toHaveBeenCalled()
+    expect(bash.modes).toEqual([])
 
     const malformed = sandboxAgent()
     ;(malformed.session.events as unknown as Array<{ type: string; data: { mode: string } }>).push({

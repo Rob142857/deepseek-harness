@@ -225,7 +225,7 @@ The bash tool is the model-facing consumer of the bash executor seam. A `run_in_
 
 ### `pwsh`
 
-Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr. Each call runs in a fresh pwsh process: no state (cwd, variables, functions) persists between calls — pass `workdir` instead of using `cd`. Paths use native Windows form (`C:\...`); read environment variables with `$env:NAME`. Non-zero exits are reported as `[exit code: N]`. Current harness environment facts are exposed through managed `$env:DSH_*` variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. On Windows a force-killed command settles as `[exit code: 1]` without a signal marker — treat it as an interruption, not a command failure. Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.
+Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr. Each call runs in a fresh pwsh process: no state (cwd, variables, functions) persists between calls — pass `workdir` instead of using `cd`. Paths use native Windows form (`C:\...`); read environment variables with `$env:NAME`. Non-zero exits are reported as `[exit code: N]`. For an ordinary foreground call, pass only `command` and `description`. Omit every optional property unless its non-default behavior is specifically needed; never send `false`, empty strings, or other default placeholder values. Current harness environment facts are exposed through managed `$env:DSH_*` variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. On Windows a force-killed command settles as `[exit code: 1]` without a signal marker — treat it as an interruption, not a command failure. Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.
 
 ```json
 {
@@ -241,15 +241,15 @@ Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr. Eac
     },
     "timeoutMs": {
       "type": "number",
-      "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+      "description": "Optional; omit to use the executor default. When set, this is the timeout in milliseconds; the executor applies its configured cap and kills the command on expiry."
     },
     "workdir": {
       "type": "string",
-      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+      "description": "Optional; omit to use the session workspace. When set, this is the command working directory; a relative path is resolved against the session workspace."
     },
     "run_in_background": {
       "type": "boolean",
-      "description": "Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies."
+      "description": "Optional; set true only for a background run and omit for foreground calls — never send false. Returns a job id immediately (collect with job_output, stop with job_kill); no timeout applies."
     }
   },
   "required": [
